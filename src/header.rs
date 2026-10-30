@@ -1,3 +1,5 @@
+use super::reader::Reader;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Header {
     id: u16,
@@ -9,26 +11,22 @@ pub(super) struct Header {
 }
 
 impl Header {
-    pub fn parse(bytes: &[u8]) -> Result<Self, HeaderError> {
-        if bytes.len() < 12 {
-            return Err(HeaderError::InvalidHeaderLength);
-        }
-
+    pub fn parse(reader: &mut Reader) -> Result<Self, HeaderError> {
         Ok(Self {
-            id: u16::from_be_bytes([bytes[0], bytes[1]]),
-            flags: Flags::try_from(u16::from_be_bytes([bytes[2], bytes[3]]))?,
-            qd_count: u16::from_be_bytes([bytes[4], bytes[5]]),
-            an_count: u16::from_be_bytes([bytes[6], bytes[7]]),
-            ns_count: u16::from_be_bytes([bytes[8], bytes[9]]),
-            ar_count: u16::from_be_bytes([bytes[10], bytes[11]]),
+            id: reader.read_u16()?,
+            flags: Flags::try_from(reader.read_u16()?)?,
+            qd_count: reader.read_u16()?,
+            an_count: reader.read_u16()?,
+            ns_count: reader.read_u16()?,
+            ar_count: reader.read_u16()?,
         })
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum HeaderError {
-    #[error("Invalid header length")]
-    InvalidHeaderLength,
+    #[error(transparent)]
+    Reader(#[from] super::reader::ReaderError),
     #[error(transparent)]
     FlagsParse(#[from] FlagsParseError),
 }
@@ -152,7 +150,7 @@ pub(super) struct RcodeParseError(u8);
 
 #[cfg(test)]
 mod tests {
-    use super::{Flags, Header, Opcode, Rcode};
+    use super::{Flags, Header, Opcode, Rcode, Reader};
 
     #[test]
     fn parse_dig_query_header() {
@@ -179,12 +177,12 @@ mod tests {
             ns_count: 0,
             ar_count: 0,
         };
-        assert_eq!(Header::parse(&input).unwrap(), expected);
+        assert_eq!(Header::parse(&mut Reader::new(&input)).unwrap(), expected);
     }
 
     #[test]
     fn parse_rejects_short_header() {
-        assert!(Header::parse(&[0x3f, 0x00, 0x01]).is_err());
+        assert!(Header::parse(&mut Reader::new(&[0x3f, 0x00, 0x01])).is_err());
     }
 
     #[test]

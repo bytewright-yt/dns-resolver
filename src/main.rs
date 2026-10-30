@@ -1,11 +1,12 @@
 mod header;
 mod hexdump;
+mod reader;
 
 use std::io;
 
 use tokio::net::UdpSocket;
 
-use {header::Header, hexdump::Hexdump};
+use {header::Header, hexdump::Hexdump, reader::Reader};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -19,7 +20,9 @@ async fn main() -> Result<(), Error> {
         println!("Hexdump of the received data:");
         println!("{}", Hexdump::new(&buf[..len]));
 
-        let header = match Header::parse(&buf[..len]) {
+        let mut reader = Reader::new(&buf[..len]);
+
+        let header = match Header::parse(&mut reader) {
             Ok(header) => header,
             Err(e) => {
                 eprintln!("Failed to parse header: {e}");
