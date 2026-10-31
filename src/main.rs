@@ -1,5 +1,6 @@
 mod header;
 mod hexdump;
+mod name;
 mod reader;
 
 use std::io;

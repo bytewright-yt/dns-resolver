@@ -22,6 +22,11 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
+    pub(super) fn read_u8(&mut self) -> Result<u8, ReaderError> {
+        let slice = self.read_slice(1)?;
+        Ok(slice[0])
+    }
+
     pub(super) fn read_u16(&mut self) -> Result<u16, ReaderError> {
         let slice = self.read_slice(2)?;
         Ok(u16::from_be_bytes([slice[0], slice[1]]))
