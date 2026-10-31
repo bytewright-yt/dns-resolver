@@ -1,4 +1,4 @@
-use super::reader::Reader;
+use super::{reader::Reader, writer::Writer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Header {
@@ -11,7 +11,7 @@ pub(super) struct Header {
 }
 
 impl Header {
-    pub fn parse(reader: &mut Reader) -> Result<Self, HeaderError> {
+    pub(super) fn parse(reader: &mut Reader) -> Result<Self, HeaderError> {
         Ok(Self {
             id: reader.read_u16()?,
             flags: Flags::try_from(reader.read_u16()?)?,
@@ -20,6 +20,53 @@ impl Header {
             ns_count: reader.read_u16()?,
             ar_count: reader.read_u16()?,
         })
+    }
+
+    /// Whether this message is a response (QR set). Servers must not reply to
+    /// responses, or two servers could bounce packets between each other forever.
+    pub(super) fn is_response(&self) -> bool {
+        self.flags.response
+    }
+
+    pub(super) fn opcode(&self) -> Opcode {
+        self.flags.opcode
+    }
+
+    pub(super) fn write(&self, writer: &mut Writer) {
+        writer.write_u16(self.id);
+        writer.write_u16(u16::from(self.flags));
+        writer.write_u16(self.qd_count);
+        writer.write_u16(self.an_count);
+        writer.write_u16(self.ns_count);
+        writer.write_u16(self.ar_count);
+    }
+
+    /// Build the header for a response to `query`.
+    ///
+    /// Copies the ID (so the client can match the reply to its query), the
+    /// opcode and RD; sets QR; clears every other flag; uses `rcode`. The
+    /// questions are echoed back, so `qd_count` is copied and the other
+    /// counts are 0.
+    pub(super) fn response_to(query: &Header, rcode: Rcode) -> Header {
+        Header {
+            id: query.id,
+            flags: Flags {
+                response: true,
+                opcode: query.flags.opcode,
+                authoritative: false,
+                truncated: false,
+                recursion_desired: query.flags.recursion_desired,
+                recursion_available: false,
+                z: false,
+                authenticated_data: false,
+                checking_disabled: false,
+                rcode,
+            },
+            qd_count: query.qd_count,
+            an_count: 0,
+            ns_count: 0,
+            ar_count: 0,
+        }
     }
 }
 
@@ -150,7 +197,7 @@ pub(super) struct RcodeParseError(u8);
 
 #[cfg(test)]
 mod tests {
-    use super::{Flags, Header, Opcode, Rcode, Reader};
+    use super::{Flags, Header, Opcode, Rcode, Reader, Writer};
 
     #[test]
     fn parse_dig_query_header() {
@@ -191,5 +238,159 @@ mod tests {
         for bits in [0x0120, 0x8180, 0x8183, 0x0000] {
             assert_eq!(u16::from(Flags::try_from(bits).unwrap()), bits);
         }
+    }
+
+    fn round_trip(input: &[u8]) -> Vec<u8> {
+        let header = Header::parse(&mut Reader::new(input)).unwrap();
+        let mut writer = Writer::new();
+        header.write(&mut writer);
+        writer.into_bytes()
+    }
+
+    #[test]
+    fn dig_query_header_round_trips() {
+        let input = [
+            0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+
+        assert_eq!(round_trip(&input), input);
+    }
+
+    #[test]
+    fn response_header_round_trips() {
+        // NXDOMAIN response: QR, RD, RA set, RCODE 3, every count different
+        let input = [
+            0xbe, 0xef, 0x81, 0x83, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04,
+        ];
+
+        assert_eq!(round_trip(&input), input);
+    }
+
+    /// Flags with only the given fields set, for building expected values.
+    fn flags(response: bool, opcode: Opcode, recursion_desired: bool, rcode: Rcode) -> Flags {
+        Flags {
+            response,
+            opcode,
+            authoritative: false,
+            truncated: false,
+            recursion_desired,
+            recursion_available: false,
+            z: false,
+            authenticated_data: false,
+            checking_disabled: false,
+            rcode,
+        }
+    }
+
+    fn query_header(input: &[u8]) -> Header {
+        Header::parse(&mut Reader::new(input)).unwrap()
+    }
+
+    #[test]
+    fn response_to_dig_query() {
+        // Header of `dig @127.0.0.1 -p 5353 youtube.com +tries=1 +timeout=1 +noedns`: RD and AD set
+        let query = query_header(&[
+            0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
+
+        let response = Header::response_to(&query, Rcode::Refused);
+
+        assert_eq!(
+            response,
+            Header {
+                id: 0x3f00,
+                flags: flags(true, Opcode::Query, true, Rcode::Refused),
+                qd_count: 1,
+                an_count: 0,
+                ns_count: 0,
+                ar_count: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn response_to_dig_query_on_the_wire() {
+        let query = query_header(&[
+            0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
+        let mut writer = Writer::new();
+        Header::response_to(&query, Rcode::Refused).write(&mut writer);
+
+        // Flags 0x8105: QR (0x8000) | RD (0x0100) | RCODE 5 (REFUSED)
+        assert_eq!(
+            writer.into_bytes(),
+            [
+                0x3f, 0x00, 0x81, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+            ]
+        );
+    }
+
+    #[test]
+    fn response_copies_rd_when_clear() {
+        // `dig +norecurse`: RD not set, so the response mustn't set it either
+        let query = query_header(&[
+            0x12, 0x34, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
+
+        let response = Header::response_to(&query, Rcode::Refused);
+
+        assert!(!response.flags.recursion_desired);
+    }
+
+    #[test]
+    fn response_copies_opcode() {
+        // STATUS query (opcode 2): answered with NOTIMP, opcode echoed back
+        let query = query_header(&[
+            0x12, 0x34, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
+
+        let response = Header::response_to(&query, Rcode::NotImplemented);
+
+        assert_eq!(
+            response.flags,
+            flags(true, Opcode::Status, false, Rcode::NotImplemented)
+        );
+    }
+
+    #[test]
+    fn response_clears_query_only_flags_and_counts() {
+        // Every flag bit that a query could set (AA, TC, RA, Z, AD, CD), plus an
+        // EDNS OPT record in the additional section and junk answer/authority counts
+        let query = query_header(&[
+            0x12, 0x34, 0x07, 0xf0, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x01,
+        ]);
+
+        let response = Header::response_to(&query, Rcode::Refused);
+
+        assert_eq!(
+            response,
+            Header {
+                id: 0x1234,
+                flags: flags(true, Opcode::Query, true, Rcode::Refused),
+                qd_count: 1,
+                an_count: 0,
+                ns_count: 0,
+                ar_count: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn query_is_not_a_response() {
+        let query = query_header(&[
+            0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
+
+        assert!(!query.is_response());
+        assert_eq!(query.opcode(), Opcode::Query);
+    }
+
+    #[test]
+    fn response_is_a_response() {
+        let query = query_header(&[
+            0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
+
+        assert!(Header::response_to(&query, Rcode::Refused).is_response());
     }
 }

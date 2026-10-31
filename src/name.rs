@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::writer::Writer;
+
 /// A domain name, e.g. "www.youtube.com", stored as its list of labels.
 ///
 /// Names compare case-insensitively, but the wire format preserves case, so
@@ -29,11 +31,11 @@ impl Name {
         let mut total_length = 1;
         loop {
             let label = Label::parse(reader)?;
-            if label.0.is_empty() {
+            if label.is_empty() {
                 break;
             }
             // length byte + label bytes
-            total_length += 1 + label.0.len();
+            total_length += 1 + label.len();
             if total_length > 255 {
                 return Err(NameParseError::NameTooLong(total_length));
             }
@@ -41,6 +43,14 @@ impl Name {
             labels.push(label);
         }
         Ok(Self(labels))
+    }
+
+    pub(super) fn write(&self, writer: &mut Writer) {
+        for label in &self.0 {
+            label.write(writer);
+        }
+        // Terminating 0-length label
+        writer.write_u8(0);
     }
 }
 
@@ -71,7 +81,12 @@ pub(super) enum NameParseError {
 /// Labels are raw bytes, not guaranteed to be ASCII or UTF-8. An empty label
 /// is the root, which marks the end of a name.
 #[derive(Debug, Clone)]
-pub(super) struct Label(Vec<u8>);
+pub(super) struct Label {
+    bytes: Vec<u8>,
+    /// Always equal to `bytes.len()`, and at most 63. Stored as a `u8` so it
+    /// can be written as the length byte without a conversion.
+    len: u8,
+}
 
 impl Label {
     /// Parse a single label from the reader.
@@ -101,18 +116,34 @@ impl Label {
         match length_byte >> 6 {
             0b00 => {
                 let length = length_byte & 0x3f;
-                let label_bytes = reader.read_slice(length as usize)?.to_vec();
-                Ok(Label(label_bytes))
+                let label_bytes = reader.read_slice(usize::from(length))?.to_vec();
+                Ok(Label {
+                    bytes: label_bytes,
+                    len: length,
+                })
             }
             0b11 => Err(LabelParseError::CompressionPointer),
             prefix => Err(LabelParseError::ReservedPrefix(prefix)),
         }
     }
+
+    pub(super) fn write(&self, writer: &mut Writer) {
+        writer.write_u8(self.len);
+        writer.write_slice(&self.bytes);
+    }
+
+    pub(super) fn len(&self) -> usize {
+        usize::from(self.len)
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &byte in &self.0 {
+        for &byte in &self.bytes {
             match byte {
                 b'.' | b'\\' => write!(f, "\\{}", byte as char)?,
                 0x21..=0x7e => write!(f, "{}", byte as char)?,
@@ -127,7 +158,7 @@ impl Eq for Label {}
 /// Labels compare case-insensitively.
 impl PartialEq for Label {
     fn eq(&self, other: &Self) -> bool {
-        self.0.eq_ignore_ascii_case(&other.0)
+        self.bytes.eq_ignore_ascii_case(&other.bytes)
     }
 }
 
@@ -144,7 +175,7 @@ pub(super) enum LabelParseError {
 #[cfg(test)]
 mod tests {
     use super::{Label, Name};
-    use crate::reader::Reader;
+    use crate::{reader::Reader, writer::Writer};
 
     /// Encode labels in wire format: length byte, label bytes, ..., terminating 0.
     fn wire(labels: &[&[u8]]) -> Vec<u8> {
@@ -157,8 +188,15 @@ mod tests {
         out
     }
 
+    fn label(bytes: &[u8]) -> Label {
+        Label {
+            bytes: bytes.to_vec(),
+            len: u8::try_from(bytes.len()).unwrap(),
+        }
+    }
+
     fn name(labels: &[&[u8]]) -> Name {
-        Name(labels.iter().map(|l| Label(l.to_vec())).collect())
+        Name(labels.iter().map(|l| label(l)).collect())
     }
 
     #[test]
@@ -185,14 +223,14 @@ mod tests {
         let input = wire(&[b"YouTube", b"COM"]);
         let parsed = Name::parse(&mut Reader::new(&input)).unwrap();
 
-        assert_eq!(parsed.0[0].0, b"YouTube");
-        assert_eq!(parsed.0[1].0, b"COM");
+        assert_eq!(parsed.0[0].bytes, b"YouTube");
+        assert_eq!(parsed.0[1].bytes, b"COM");
     }
 
     #[test]
     fn labels_compare_case_insensitively() {
-        assert_eq!(Label(b"YouTube".to_vec()), Label(b"youtube".to_vec()));
-        assert_ne!(Label(b"youtube".to_vec()), Label(b"youtub".to_vec()));
+        assert_eq!(label(b"YouTube"), label(b"youtube"));
+        assert_ne!(label(b"youtube"), label(b"youtub"));
     }
 
     #[test]
@@ -319,5 +357,42 @@ mod tests {
         assert_eq!(name(&[b"a\nb", b"com"]).to_string(), r"a\010b.com.");
         assert_eq!(name(&[b"a b"]).to_string(), r"a\032b.");
         assert_eq!(name(&[b"\x00\xff"]).to_string(), r"\000\255.");
+    }
+
+    fn round_trip(input: &[u8]) -> Vec<u8> {
+        let name = Name::parse(&mut Reader::new(input)).unwrap();
+        let mut writer = Writer::new();
+        name.write(&mut writer);
+        writer.into_bytes()
+    }
+
+    #[test]
+    fn name_round_trips_preserving_case() {
+        // The response must echo the question name byte for byte
+        let input = wire(&[b"YouTube", b"COM"]);
+
+        assert_eq!(round_trip(&input), input);
+    }
+
+    #[test]
+    fn root_name_round_trips() {
+        assert_eq!(round_trip(&[0x00]), [0x00]);
+    }
+
+    #[test]
+    fn longest_name_round_trips() {
+        let long = [b'a'; 63];
+        let short = [b'b'; 61];
+        let input = wire(&[&long, &long, &long, &short]);
+
+        assert_eq!(round_trip(&input), input);
+    }
+
+    #[test]
+    fn label_writes_length_then_bytes() {
+        let mut writer = Writer::new();
+        label(b"com").write(&mut writer);
+
+        assert_eq!(writer.into_bytes(), [0x03, b'c', b'o', b'm']);
     }
 }

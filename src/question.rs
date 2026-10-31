@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::name::Name;
+use crate::{name::Name, reader::Reader, writer::Writer};
 
 /// A single entry in the question section: what the client is asking for.
 ///
@@ -34,12 +34,18 @@ pub(super) struct Question {
 }
 
 impl Question {
-    pub(super) fn parse(reader: &mut crate::reader::Reader) -> Result<Self, QuestionParseError> {
+    pub(super) fn parse(reader: &mut Reader) -> Result<Self, QuestionParseError> {
         Ok(Self {
             name: Name::parse(reader)?,
             qtype: QType::from(reader.read_u16()?),
             qclass: QClass::from(reader.read_u16()?),
         })
+    }
+
+    pub(super) fn write(&self, writer: &mut Writer) {
+        self.name.write(writer);
+        writer.write_u16(u16::from(self.qtype));
+        writer.write_u16(u16::from(self.qclass));
     }
 }
 
@@ -182,7 +188,7 @@ impl From<QClass> for u16 {
 #[cfg(test)]
 mod tests {
     use super::{QClass, QType, Question};
-    use crate::{name::Name, reader::Reader};
+    use crate::{header::Header, name::Name, reader::Reader, writer::Writer};
 
     #[test]
     fn parses_question_from_dig_query() {
@@ -273,5 +279,52 @@ mod tests {
             youtube_com_question(65, 3).to_string(),
             "youtube.com. CLASS3 TYPE65"
         );
+    }
+
+    #[test]
+    fn dig_question_round_trips() {
+        let input = [
+            0x07, 0x79, 0x6f, 0x75, 0x74, 0x75, 0x62, 0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00,
+            0x01, 0x00, 0x01,
+        ];
+        let question = Question::parse(&mut Reader::new(&input)).unwrap();
+        let mut writer = Writer::new();
+        question.write(&mut writer);
+
+        assert_eq!(writer.into_bytes(), input);
+    }
+
+    #[test]
+    fn unknown_type_and_class_round_trip() {
+        // HTTPS (65) in CH (3): both come back as `Other` and must be written unchanged
+        let question = youtube_com_question(65, 3);
+        let mut writer = Writer::new();
+        question.write(&mut writer);
+
+        let bytes = writer.into_bytes();
+        assert_eq!(bytes[bytes.len() - 4..], [0x00, 0x41, 0x00, 0x03]);
+    }
+
+    #[test]
+    fn full_dig_query_round_trips() {
+        // The whole 29-byte packet from `dig @127.0.0.1 -p 5353 youtube.com +tries=1 +timeout=1 +noedns`
+        let input = [
+            0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x79,
+            0x6f, 0x75, 0x74, 0x75, 0x62, 0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00,
+            0x01,
+        ];
+        let mut reader = Reader::new(&input);
+        let header = Header::parse(&mut reader).unwrap();
+        let questions: Vec<Question> = (0..header.qd_count)
+            .map(|_| Question::parse(&mut reader).unwrap())
+            .collect();
+
+        let mut writer = Writer::new();
+        header.write(&mut writer);
+        for question in &questions {
+            question.write(&mut writer);
+        }
+
+        assert_eq!(writer.into_bytes(), input);
     }
 }

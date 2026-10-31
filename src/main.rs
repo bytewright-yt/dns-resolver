@@ -3,43 +3,78 @@ mod hexdump;
 mod name;
 mod question;
 mod reader;
+mod writer;
 
 use std::io;
 
 use tokio::net::UdpSocket;
 
-use {header::Header, hexdump::Hexdump, question::Question, reader::Reader};
+use {
+    header::{Header, Opcode, Rcode},
+    hexdump::Hexdump,
+    question::Question,
+    reader::Reader,
+    writer::Writer,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let socket = UdpSocket::bind("127.0.0.1:5353").await?;
     let mut buf = [0u8; 4096];
 
-    loop {
+    'packets: loop {
         let (len, addr) = socket.recv_from(&mut buf).await?;
-        println!("Received {len} bytes from {addr}");
-
-        println!("Hexdump of the received data:");
-        println!("{}", Hexdump::new(&buf[..len]));
-
-        let mut reader = Reader::new(&buf[..len]);
+        let packet = &buf[..len];
+        let mut reader = Reader::new(packet);
 
         let header = match Header::parse(&mut reader) {
             Ok(header) => header,
             Err(e) => {
-                eprintln!("Failed to parse header: {e}");
+                eprintln!(
+                    "{addr}: failed to parse header: {e}\n{}",
+                    Hexdump::new(packet)
+                );
                 continue;
             }
         };
+
+        // Never reply to a response, or two servers could loop forever
+        if header.is_response() {
+            eprintln!("{addr}: ignoring response");
+            continue;
+        }
+
+        let mut questions = Vec::with_capacity(header.qd_count as usize);
         for _ in 0..header.qd_count {
-            let question = match Question::parse(&mut reader) {
-                Ok(question) => question,
+            match Question::parse(&mut reader) {
+                Ok(question) => questions.push(question),
                 Err(e) => {
-                    eprintln!("Failed to parse question: {e}");
-                    break;
+                    eprintln!(
+                        "{addr}: failed to parse question: {e}\n{}",
+                        Hexdump::new(packet)
+                    );
+                    continue 'packets;
                 }
-            };
-            println!("Question: {question}");
+            }
+        }
+
+        for question in &questions {
+            println!("{addr}: {question}");
+        }
+
+        let rcode = match header.opcode() {
+            Opcode::Query => Rcode::Refused,
+            _ => Rcode::NotImplemented,
+        };
+
+        let mut writer = Writer::new();
+        Header::response_to(&header, rcode).write(&mut writer);
+        for question in &questions {
+            question.write(&mut writer);
+        }
+
+        if let Err(e) = socket.send_to(&writer.into_bytes(), addr).await {
+            eprintln!("{addr}: failed to send response: {e}");
         }
     }
 }
