@@ -1,17 +1,17 @@
 use super::{reader::Reader, writer::Writer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Header {
+pub(crate) struct Header {
     id: u16,
     flags: Flags,
-    pub(super) qd_count: u16,
+    qd_count: u16,
     an_count: u16,
     ns_count: u16,
     ar_count: u16,
 }
 
 impl Header {
-    pub(super) fn parse(reader: &mut Reader) -> Result<Self, HeaderError> {
+    pub(crate) fn parse(reader: &mut Reader) -> Result<Self, HeaderError> {
         Ok(Self {
             id: reader.read_u16()?,
             flags: Flags::try_from(reader.read_u16()?)?,
@@ -24,15 +24,25 @@ impl Header {
 
     /// Whether this message is a response (QR set). Servers must not reply to
     /// responses, or two servers could bounce packets between each other forever.
-    pub(super) fn is_response(&self) -> bool {
+    pub(crate) fn is_response(&self) -> bool {
         self.flags.response
     }
 
-    pub(super) fn opcode(&self) -> Opcode {
+    pub(crate) fn opcode(&self) -> Opcode {
         self.flags.opcode
     }
 
-    pub(super) fn write(&self, writer: &mut Writer) {
+    /// Number of entries in the question section.
+    pub(crate) fn qd_count(&self) -> u16 {
+        self.qd_count
+    }
+
+    /// Number of records in the answer section.
+    pub(crate) fn an_count(&self) -> u16 {
+        self.an_count
+    }
+
+    pub(crate) fn write(&self, writer: &mut Writer) {
         writer.write_u16(self.id);
         writer.write_u16(u16::from(self.flags));
         writer.write_u16(self.qd_count);
@@ -45,9 +55,14 @@ impl Header {
     ///
     /// Copies the ID (so the client can match the reply to its query), the
     /// opcode and RD; sets QR; clears every other flag; uses `rcode`. The
-    /// questions are echoed back, so `qd_count` is copied and the other
-    /// counts are 0.
-    pub(super) fn response_to(query: &Header, rcode: Rcode) -> Header {
+    /// counts are passed in by whoever built the sections, so they always
+    /// match what is actually written.
+    pub(crate) fn response_to(
+        query: &Header,
+        rcode: Rcode,
+        qd_count: u16,
+        an_count: u16,
+    ) -> Header {
         Header {
             id: query.id,
             flags: Flags {
@@ -62,8 +77,8 @@ impl Header {
                 checking_disabled: false,
                 rcode,
             },
-            qd_count: query.qd_count,
-            an_count: 0,
+            qd_count,
+            an_count,
             ns_count: 0,
             ar_count: 0,
         }
@@ -71,7 +86,7 @@ impl Header {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum HeaderError {
+pub(crate) enum HeaderError {
     #[error(transparent)]
     Reader(#[from] super::reader::ReaderError),
     #[error(transparent)]
@@ -81,17 +96,17 @@ pub(super) enum HeaderError {
 // mirrors the single-bit flags on the wire
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
-pub(super) struct Flags {
-    response: bool, // QR
-    opcode: Opcode,
-    authoritative: bool,       // AA
-    truncated: bool,           // TC
-    recursion_desired: bool,   // RD
-    recursion_available: bool, // RA
-    z: bool,                   // Z
-    authenticated_data: bool,  // AD
-    checking_disabled: bool,   // CD
-    rcode: Rcode,
+pub(crate) struct Flags {
+    pub(crate) response: bool, // QR
+    pub(crate) opcode: Opcode,
+    pub(crate) authoritative: bool,       // AA
+    pub(crate) truncated: bool,           // TC
+    pub(crate) recursion_desired: bool,   // RD
+    pub(crate) recursion_available: bool, // RA
+    pub(crate) z: bool,                   // Z
+    pub(crate) authenticated_data: bool,  // AD
+    pub(crate) checking_disabled: bool,   // CD
+    pub(crate) rcode: Rcode,
 }
 
 impl TryFrom<u16> for Flags {
@@ -130,7 +145,7 @@ impl From<Flags> for u16 {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum FlagsParseError {
+pub(crate) enum FlagsParseError {
     #[error(transparent)]
     Opcode(#[from] OpcodeParseError),
     #[error(transparent)]
@@ -138,7 +153,7 @@ pub(super) enum FlagsParseError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Opcode {
+pub(crate) enum Opcode {
     Query = 0,
     IQuery = 1,
     Status = 2,
@@ -163,10 +178,10 @@ impl TryFrom<u8> for Opcode {
 
 #[derive(Debug, thiserror::Error)]
 #[error("Invalid opcode value: {0}")]
-pub(super) struct OpcodeParseError(u8);
+pub(crate) struct OpcodeParseError(u8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Rcode {
+pub(crate) enum Rcode {
     NoError = 0,
     FormatError = 1,
     ServerFailure = 2,
@@ -193,7 +208,7 @@ impl TryFrom<u8> for Rcode {
 
 #[derive(Debug, thiserror::Error)]
 #[error("Invalid rcode value: {0}")]
-pub(super) struct RcodeParseError(u8);
+pub(crate) struct RcodeParseError(u8);
 
 #[cfg(test)]
 mod tests {
@@ -293,7 +308,7 @@ mod tests {
             0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ]);
 
-        let response = Header::response_to(&query, Rcode::Refused);
+        let response = Header::response_to(&query, Rcode::Refused, 1, 0);
 
         assert_eq!(
             response,
@@ -314,7 +329,7 @@ mod tests {
             0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ]);
         let mut writer = Writer::new();
-        Header::response_to(&query, Rcode::Refused).write(&mut writer);
+        Header::response_to(&query, Rcode::Refused, 1, 0).write(&mut writer);
 
         // Flags 0x8105: QR (0x8000) | RD (0x0100) | RCODE 5 (REFUSED)
         assert_eq!(
@@ -332,7 +347,7 @@ mod tests {
             0x12, 0x34, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ]);
 
-        let response = Header::response_to(&query, Rcode::Refused);
+        let response = Header::response_to(&query, Rcode::Refused, 1, 0);
 
         assert!(!response.flags.recursion_desired);
     }
@@ -344,7 +359,7 @@ mod tests {
             0x12, 0x34, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ]);
 
-        let response = Header::response_to(&query, Rcode::NotImplemented);
+        let response = Header::response_to(&query, Rcode::NotImplemented, 0, 0);
 
         assert_eq!(
             response.flags,
@@ -360,7 +375,7 @@ mod tests {
             0x12, 0x34, 0x07, 0xf0, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x01,
         ]);
 
-        let response = Header::response_to(&query, Rcode::Refused);
+        let response = Header::response_to(&query, Rcode::Refused, 1, 0);
 
         assert_eq!(
             response,
@@ -391,6 +406,25 @@ mod tests {
             0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ]);
 
-        assert!(Header::response_to(&query, Rcode::Refused).is_response());
+        assert!(Header::response_to(&query, Rcode::Refused, 1, 0).is_response());
+    }
+
+    #[test]
+    fn response_with_one_answer_on_the_wire() {
+        let query = query_header(&[
+            0x3f, 0x00, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
+        let response = Header::response_to(&query, Rcode::NoError, 1, 1);
+
+        let mut writer = Writer::new();
+        response.write(&mut writer);
+
+        // Flags 0x8100: QR | RD, RCODE 0 (NOERROR). QDCOUNT 1, ANCOUNT 1
+        assert_eq!(
+            writer.into_bytes(),
+            [
+                0x3f, 0x00, 0x81, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00
+            ]
+        );
     }
 }

@@ -7,7 +7,7 @@ use crate::writer::Writer;
 /// Names compare case-insensitively, but the wire format preserves case, so
 /// the labels are stored exactly as received.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Name(Vec<Label>);
+pub(crate) struct Name(Vec<Label>);
 
 impl Name {
     /// Parse a domain name from the reader.
@@ -25,7 +25,7 @@ impl Name {
     ///
     /// The whole name, including every length byte and the final `00`, is
     /// limited to 255 bytes on the wire (RFC 1035 2.3.4).
-    pub(super) fn parse(reader: &mut super::reader::Reader) -> Result<Self, NameParseError> {
+    pub(crate) fn parse(reader: &mut super::reader::Reader) -> Result<Self, NameParseError> {
         let mut labels = Vec::new();
         // Starts at 1 for the terminating 0 byte
         let mut total_length = 1;
@@ -45,7 +45,7 @@ impl Name {
         Ok(Self(labels))
     }
 
-    pub(super) fn write(&self, writer: &mut Writer) {
+    pub(crate) fn write(&self, writer: &mut Writer) {
         for label in &self.0 {
             label.write(writer);
         }
@@ -67,7 +67,7 @@ impl fmt::Display for Name {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum NameParseError {
+pub(crate) enum NameParseError {
     #[error(transparent)]
     Reader(#[from] super::reader::ReaderError),
     #[error(transparent)]
@@ -81,7 +81,7 @@ pub(super) enum NameParseError {
 /// Labels are raw bytes, not guaranteed to be ASCII or UTF-8. An empty label
 /// is the root, which marks the end of a name.
 #[derive(Debug, Clone)]
-pub(super) struct Label {
+pub(crate) struct Label {
     bytes: Vec<u8>,
     /// Always equal to `bytes.len()`, and at most 63. Stored as a `u8` so it
     /// can be written as the length byte without a conversion.
@@ -111,7 +111,7 @@ impl Label {
     ///
     /// Because the length only has 6 bits, a label can never exceed 63 bytes:
     /// a length byte of 64 (`0x40`) has the reserved `01` prefix.
-    pub(super) fn parse(reader: &mut super::reader::Reader) -> Result<Self, LabelParseError> {
+    pub(crate) fn parse(reader: &mut super::reader::Reader) -> Result<Self, LabelParseError> {
         let length_byte = reader.read_u8()?;
         match length_byte >> 6 {
             0b00 => {
@@ -127,16 +127,16 @@ impl Label {
         }
     }
 
-    pub(super) fn write(&self, writer: &mut Writer) {
+    pub(crate) fn write(&self, writer: &mut Writer) {
         writer.write_u8(self.len);
         writer.write_slice(&self.bytes);
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         usize::from(self.len)
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len == 0
     }
 }
@@ -163,7 +163,7 @@ impl PartialEq for Label {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum LabelParseError {
+pub(crate) enum LabelParseError {
     #[error(transparent)]
     Reader(#[from] super::reader::ReaderError),
     #[error("Compression pointers are not supported")]

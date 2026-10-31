@@ -1,6 +1,6 @@
 use std::fmt::{self, Display};
 
-pub(super) struct Hexdump<'a> {
+pub(crate) struct Hexdump<'a> {
     bytes: &'a [u8],
 }
 

@@ -1,29 +1,34 @@
 /// Builds a DNS message byte by byte. The counterpart to [`Reader`](crate::reader::Reader).
 ///
 /// Writing to a `Vec` can't fail.
-pub(super) struct Writer {
+pub(crate) struct Writer {
     bytes: Vec<u8>,
 }
 
 impl Writer {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { bytes: Vec::new() }
     }
 
-    pub(super) fn write_u8(&mut self, value: u8) {
+    pub(crate) fn write_u8(&mut self, value: u8) {
         self.bytes.push(value);
     }
 
     /// Writes `value` in network byte order (big-endian).
-    pub(super) fn write_u16(&mut self, value: u16) {
+    pub(crate) fn write_u16(&mut self, value: u16) {
         self.bytes.extend_from_slice(&value.to_be_bytes());
     }
 
-    pub(super) fn write_slice(&mut self, bytes: &[u8]) {
+    /// Writes `value` in network byte order (big-endian).
+    pub(crate) fn write_u32(&mut self, value: u32) {
+        self.bytes.extend_from_slice(&value.to_be_bytes());
+    }
+
+    pub(crate) fn write_slice(&mut self, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
     }
 
-    pub(super) fn into_bytes(self) -> Vec<u8> {
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
 }
@@ -53,5 +58,14 @@ mod tests {
     #[test]
     fn new_writer_is_empty() {
         assert_eq!(Writer::new().into_bytes(), []);
+    }
+
+    #[test]
+    fn write_u32_is_big_endian() {
+        let mut writer = Writer::new();
+        // TTL of 300 seconds
+        writer.write_u32(300);
+
+        assert_eq!(writer.into_bytes(), [0x00, 0x00, 0x01, 0x2c]);
     }
 }

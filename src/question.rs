@@ -27,14 +27,14 @@ use crate::{name::Name, reader::Reader, writer::Writer};
 /// youtube.com                             A      IN
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Question {
+pub(crate) struct Question {
     name: Name,
     qtype: QType,
     qclass: QClass,
 }
 
 impl Question {
-    pub(super) fn parse(reader: &mut Reader) -> Result<Self, QuestionParseError> {
+    pub(crate) fn parse(reader: &mut Reader) -> Result<Self, QuestionParseError> {
         Ok(Self {
             name: Name::parse(reader)?,
             qtype: QType::from(reader.read_u16()?),
@@ -42,7 +42,7 @@ impl Question {
         })
     }
 
-    pub(super) fn write(&self, writer: &mut Writer) {
+    pub(crate) fn write(&self, writer: &mut Writer) {
         self.name.write(writer);
         writer.write_u16(u16::from(self.qtype));
         writer.write_u16(u16::from(self.qclass));
@@ -57,7 +57,7 @@ impl fmt::Display for Question {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum QuestionParseError {
+pub(crate) enum QuestionParseError {
     #[error(transparent)]
     Name(#[from] crate::name::NameParseError),
     #[error(transparent)]
@@ -72,7 +72,7 @@ pub(super) enum QuestionParseError {
 /// Variant names match the RFC mnemonics as shown by `dig`.
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum QType {
+pub(crate) enum QType {
     A,
     NS,
     CNAME,
@@ -149,7 +149,7 @@ impl From<QType> for u16 {
 /// `dig CH TXT version.bind`, and is kept as `Other(3)`.
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum QClass {
+pub(crate) enum QClass {
     IN,
     ANY,
     Other(u16),
@@ -315,7 +315,7 @@ mod tests {
         ];
         let mut reader = Reader::new(&input);
         let header = Header::parse(&mut reader).unwrap();
-        let questions: Vec<Question> = (0..header.qd_count)
+        let questions: Vec<Question> = (0..header.qd_count())
             .map(|_| Question::parse(&mut reader).unwrap())
             .collect();
 
