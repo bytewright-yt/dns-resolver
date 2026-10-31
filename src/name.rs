@@ -1,3 +1,5 @@
+use std::fmt;
+
 /// A domain name, e.g. "www.youtube.com", stored as its list of labels.
 ///
 /// Names compare case-insensitively, but the wire format preserves case, so
@@ -39,6 +41,18 @@ impl Name {
             labels.push(label);
         }
         Ok(Self(labels))
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.is_empty() {
+            write!(f, ".")?;
+        }
+        for label in &self.0 {
+            write!(f, "{label}.")?;
+        }
+        Ok(())
     }
 }
 
@@ -93,6 +107,19 @@ impl Label {
             0b11 => Err(LabelParseError::CompressionPointer),
             prefix => Err(LabelParseError::ReservedPrefix(prefix)),
         }
+    }
+}
+
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for &byte in &self.0 {
+            match byte {
+                b'.' | b'\\' => write!(f, "\\{}", byte as char)?,
+                0x21..=0x7e => write!(f, "{}", byte as char)?,
+                _ => write!(f, "\\{byte:03}")?,
+            }
+        }
+        Ok(())
     }
 }
 
@@ -262,5 +289,35 @@ mod tests {
         assert_eq!(input.len(), 257);
 
         assert!(Name::parse(&mut Reader::new(&input)).is_err());
+    }
+
+    #[test]
+    fn displays_fully_qualified_name() {
+        assert_eq!(name(&[b"youtube", b"com"]).to_string(), "youtube.com.");
+    }
+
+    #[test]
+    fn displays_root_as_dot() {
+        assert_eq!(name(&[]).to_string(), ".");
+    }
+
+    #[test]
+    fn display_preserves_case() {
+        assert_eq!(name(&[b"YouTube", b"COM"]).to_string(), "YouTube.COM.");
+    }
+
+    #[test]
+    fn display_escapes_dot_and_backslash() {
+        // One label "a.b" must not look like two labels "a" and "b"
+        assert_eq!(name(&[b"a.b", b"com"]).to_string(), r"a\.b.com.");
+        assert_eq!(name(&[b"a\\b", b"com"]).to_string(), r"a\\b.com.");
+    }
+
+    #[test]
+    fn display_escapes_unprintable_bytes_as_decimal() {
+        // Like dig: \DDD with 3 decimal digits, including space
+        assert_eq!(name(&[b"a\nb", b"com"]).to_string(), r"a\010b.com.");
+        assert_eq!(name(&[b"a b"]).to_string(), r"a\032b.");
+        assert_eq!(name(&[b"\x00\xff"]).to_string(), r"\000\255.");
     }
 }

@@ -4,7 +4,7 @@ use super::reader::Reader;
 pub(super) struct Header {
     id: u16,
     flags: Flags,
-    qd_count: u16,
+    pub(super) qd_count: u16,
     an_count: u16,
     ns_count: u16,
     ar_count: u16,

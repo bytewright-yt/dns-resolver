@@ -1,13 +1,14 @@
 mod header;
 mod hexdump;
 mod name;
+mod question;
 mod reader;
 
 use std::io;
 
 use tokio::net::UdpSocket;
 
-use {header::Header, hexdump::Hexdump, reader::Reader};
+use {header::Header, hexdump::Hexdump, question::Question, reader::Reader};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -30,7 +31,16 @@ async fn main() -> Result<(), Error> {
                 continue;
             }
         };
-        println!("Parsed header: {header:?}");
+        for _ in 0..header.qd_count {
+            let question = match Question::parse(&mut reader) {
+                Ok(question) => question,
+                Err(e) => {
+                    eprintln!("Failed to parse question: {e}");
+                    break;
+                }
+            };
+            println!("Question: {question}");
+        }
     }
 }
 
