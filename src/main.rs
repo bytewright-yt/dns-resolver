@@ -21,7 +21,7 @@ use {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let socket = UdpSocket::bind("127.0.0.1:5353").await?;
+    let socket = UdpSocket::bind("127.0.0.1:5300").await?;
     let mut buf = [0u8; 4096];
 
     loop {
